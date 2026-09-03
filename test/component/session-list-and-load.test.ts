@@ -104,6 +104,9 @@ test('PiAcpAgent: listSessions lists pi sessions and loadSession replays history
 
       assert.ok(texts.some(t => t.kind === 'user_message_chunk' && t.text === 'Hello'))
       assert.ok(texts.some(t => t.kind === 'agent_message_chunk' && t.text === 'Hi there!'))
+      assert.ok(texts.some(t => t.kind === 'session_info_update'))
+      const titleUpdate = conn.updates.map(u => (u as any).update).find(u => u?.sessionUpdate === 'session_info_update')
+      assert.equal(titleUpdate?.title, 'My Named Session')
     } finally {
       PiRpcProcess.spawn = originalSpawn
     }

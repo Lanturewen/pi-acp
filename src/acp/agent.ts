@@ -28,6 +28,7 @@ import { SessionManager, type PiAcpSession } from './session.js'
 import { SessionStore } from './session-store.js'
 import { PiRpcProcess } from '../pi-rpc/process.js'
 import { listPiSessions, findPiSession } from './pi-sessions.js'
+import { titleFromUserText } from './session-title.js'
 import { normalizePiAssistantText, normalizePiMessageText } from './translate/pi-messages.js'
 import { toolResultToText } from './translate/pi-tools.js'
 import {
@@ -126,6 +127,17 @@ export class PiAcpAgent implements ACPAgent {
   private readonly store = new SessionStore()
   private readonly restoringSessions = new Map<string, Promise<PiAcpSession>>()
 
+  // Cancel tracking: map JSON-RPC requestId to sessionId so $/cancel_request can find the session
+  private readonly requestIdToSession = new Map<string, string>()
+
+  registerRequestIdSession(requestId: string | number, sessionId: string): void {
+    this.requestIdToSession.set(String(requestId), sessionId)
+  }
+
+  unregisterRequestId(requestId: string | number): void {
+    this.requestIdToSession.delete(String(requestId))
+  }
+
   dispose(): void {
     this.sessions.disposeAll()
   }
@@ -221,6 +233,8 @@ export class PiAcpAgent implements ACPAgent {
 
       this.lastSessionCwd = cwd
       this.store.upsert({ sessionId, cwd, sessionFile: stored.sessionFile })
+      const listed = findPiSession(sessionId)
+      if (listed?.title) session.rememberTitle?.(listed.title)
 
       return session
     })()
@@ -541,6 +555,7 @@ export class PiAcpAgent implements ACPAgent {
           return { stopReason: 'end_turn' }
         }
 
+        session.rememberTitle?.(name, { emitted: true })
         await this.conn.sessionUpdate({
           sessionId: session.sessionId,
           update: {
@@ -882,7 +897,13 @@ export class PiAcpAgent implements ACPAgent {
       }
     }
 
-    const result = await session.prompt(message, images)
+    const userPromptText = params.prompt
+      .filter((b: any) => b.type === 'text' && typeof b.text === 'string')
+      .map((b: any) => b.text)
+      .join(' ')
+    const titleHint = titleFromUserText(userPromptText) || titleFromUserText(message)
+
+    const result = await session.prompt(message, images, titleHint)
 
     // ACP StopReason does not include "error"; if pi fails we map to end_turn for now,
     // unless we know this was a cancellation.
@@ -896,6 +917,44 @@ export class PiAcpAgent implements ACPAgent {
     const session = this.sessions.maybeGet(params.sessionId)
     if (!session) return
     await session.cancel()
+  }
+
+  async extNotification(method: string, params: Record<string, unknown>): Promise<void> {
+    if (method === '$/cancel_request') {
+      await this.handleCancelRequest(params)
+      return
+    }
+  }
+
+  async extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (method === '$/cancel_request') {
+      await this.handleCancelRequest(params)
+      return {}
+    }
+    throw RequestError.methodNotFound(method)
+  }
+
+  private async handleCancelRequest(params: Record<string, unknown>): Promise<void> {
+    const rawReqId = params?.requestId ?? (params as any)?.id
+    const reqId = rawReqId != null ? String(rawReqId) : null
+
+    if (reqId) {
+      const sessionId = this.requestIdToSession.get(reqId)
+      if (sessionId) {
+        const session = this.sessions.maybeGet(sessionId)
+        if (session) {
+          await session.cancel()
+          return
+        }
+      }
+    }
+
+    // Fallback: cancel any session that currently has an active in-flight turn
+    for (const session of this.sessions.getAll()) {
+      if (session.isRunning()) {
+        await session.cancel()
+      }
+    }
   }
 
   async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
@@ -966,6 +1025,7 @@ export class PiAcpAgent implements ACPAgent {
     // Replay full conversation history.
     const data = (await proc.getMessages()) as any
     const messages = Array.isArray(data?.messages) ? data.messages : []
+    let firstUserText: string | null = null
 
     for (const m of messages) {
       const role = String(m?.role ?? '')
@@ -973,6 +1033,7 @@ export class PiAcpAgent implements ACPAgent {
       if (role === 'user') {
         const text = normalizePiMessageText(m?.content)
         if (text) {
+          if (!firstUserText) firstUserText = text
           await this.conn.sessionUpdate({
             sessionId: session.sessionId,
             update: {
@@ -1058,6 +1119,20 @@ export class PiAcpAgent implements ACPAgent {
           }
         })
       }
+    }
+
+    const listed = findPiSession(params.sessionId)
+    const title = listed?.title ?? titleFromUserText(firstUserText)
+    if (title) {
+      session.rememberTitle?.(title, { emitted: true })
+      await this.conn.sessionUpdate({
+        sessionId: session.sessionId,
+        update: {
+          sessionUpdate: 'session_info_update',
+          title,
+          updatedAt: listed?.updatedAt ?? new Date().toISOString()
+        }
+      })
     }
 
     const { configOptions, models, modes } = await getSessionConfiguration(proc)

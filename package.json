@@ -42,6 +42,7 @@
     "lint": "eslint .",
     "test": "node --import tsx --test test/**/*.test.ts",
     "smoke": "node scripts/smoke-acp.mjs",
+    "prepare": "npm run build",
     "prepack": "npm run build",
     "prepublishOnly": "npm run test && npm run build"
   },

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync, openSync, readSync, closeSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, isAbsolute } from 'node:path'
+import { titleFromUserText } from './session-title.js'
 
 export type PiSessionListItem = {
   sessionId: string
@@ -240,11 +241,16 @@ function pickFallbackTitleFromHead(path: string): string | null {
         const obj = JSON.parse(line) as any
         if (obj?.type === 'message' && obj?.message?.role === 'user') {
           const content = obj?.message?.content
-          if (typeof content === 'string') return content.slice(0, 80)
-          if (Array.isArray(content)) {
-            const t = content.find((c: any) => c?.type === 'text' && typeof c?.text === 'string')
-            if (t?.text) return String(t.text).slice(0, 80)
+          let rawText: string | null = null
+          if (typeof content === 'string') rawText = content
+          else if (Array.isArray(content)) {
+            const texts = content
+              .filter((c: any) => c?.type === 'text' && typeof c?.text === 'string')
+              .map((c: any) => c.text)
+            if (texts.length > 0) rawText = texts.join(' ')
           }
+          const title = titleFromUserText(rawText)
+          if (title) return title
         }
       } catch {
         // ignore

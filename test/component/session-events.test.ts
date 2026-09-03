@@ -900,3 +900,165 @@ test('PiAcpSession: defaults notify severity to info when notifyType is absent',
     piAcp: { notify: { level: 'info' } }
   })
 })
+
+test('PiAcpSession: first prompt emits session_info_update title', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const pending = session.prompt('Fix the login bug')
+  await new Promise(r => setTimeout(r, 0))
+
+  const info = conn.updates.find(u => (u as any).update?.sessionUpdate === 'session_info_update')
+  assert.equal((info as any)?.update?.title, 'Fix the login bug')
+
+  proc.emit({ type: 'agent_settled' })
+  assert.equal(await pending, 'end_turn')
+
+  conn.updates.length = 0
+  const second = session.prompt('follow up')
+  await new Promise(r => setTimeout(r, 0))
+  const later = conn.updates.filter(u => (u as any).update?.sessionUpdate === 'session_info_update')
+  assert.ok(later.every(u => (u as any).update?.title === undefined))
+  proc.emit({ type: 'agent_settled' })
+  assert.equal(await second, 'end_turn')
+})
+
+test('PiAcpSession: forwards session_info_changed as session title', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  proc.emit({ type: 'session_info_changed', name: 'Refactor auth module' })
+  await new Promise(r => setTimeout(r, 0))
+
+  assert.equal(conn.updates.length, 1)
+  assert.equal((conn.updates[0]!.update as any).sessionUpdate, 'session_info_update')
+  assert.equal((conn.updates[0]!.update as any).title, 'Refactor auth module')
+})
+
+test('PiAcpSession: emits visible error message when message_end has stopReason=error and errorMessage', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const p = session.prompt('hello')
+  proc.emit({ type: 'agent_start' })
+  proc.emit({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      stopReason: 'error',
+      errorMessage: 'Quota reached. Next: switch models or retry later.'
+    }
+  })
+  proc.emit({ type: 'agent_end' })
+  proc.emit({ type: 'agent_settled' })
+
+  const reason = await p
+  assert.equal(reason, 'error')
+
+  const errorUpdates = conn.updates.filter(
+    u =>
+      (u.update as any).sessionUpdate === 'agent_message_chunk' &&
+      (u.update as any).content?.text?.includes('Quota reached')
+  )
+  assert.equal(errorUpdates.length, 1)
+  assert.match((errorUpdates[0]!.update as any).content.text, /⚠️ \*\*Error\*\*: Quota reached/)
+})
+
+test('PiAcpSession: cancels queued prompts when turn fails with an error', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  const session = new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const first = session.prompt('first')
+  const second = session.prompt('second')
+
+  proc.emit({ type: 'agent_start' })
+  proc.emit({
+    type: 'message_end',
+    message: {
+      role: 'assistant',
+      stopReason: 'error',
+      errorMessage: 'Quota reached.'
+    }
+  })
+  proc.emit({ type: 'agent_end' })
+  proc.emit({ type: 'agent_settled' })
+
+  const r1 = await first
+  const r2 = await second
+
+  assert.equal(r1, 'error')
+  assert.equal(r2, 'cancelled')
+
+  const clearedNotice = conn.updates.find(
+    u =>
+      (u.update as any).sessionUpdate === 'agent_message_chunk' &&
+      (u.update as any).content?.text?.includes('Cleared queued prompts')
+  )
+  assert.ok(clearedNotice)
+})
+
+test('PiAcpSession: emits visible error message on extension_error', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  proc.emit({
+    type: 'extension_error',
+    extensionName: 'my-plugin',
+    error: 'Failed to connect to backend'
+  })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  const extError = conn.updates.find(
+    u =>
+      (u.update as any).sessionUpdate === 'agent_message_chunk' &&
+      (u.update as any).content?.text?.includes('my-plugin Error')
+  )
+  assert.ok(extError)
+  assert.match((extError.update as any).content.text, /Failed to connect to backend/)
+})

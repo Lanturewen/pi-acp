@@ -27,6 +27,7 @@ import {
   isBashTool
 } from './translate/bash.js'
 import { toolResultToText } from './translate/pi-tools.js'
+import { titleFromUserText } from './session-title.js'
 
 type SessionCreateParams = {
   cwd: string
@@ -161,6 +162,11 @@ export class SessionManager {
     return this.sessions.get(sessionId)
   }
 
+  /** Get all active sessions. */
+  getAll(): PiAcpSession[] {
+    return Array.from(this.sessions.values())
+  }
+
   /**
    * Dispose a session's underlying pi process and remove it from the manager.
    * Used when clients explicitly reload a session and we want a fresh pi subprocess.
@@ -263,6 +269,11 @@ export class PiAcpSession {
   private startupInfo: string | null = null
   private startupInfoSent = false
 
+  // Last title we told the ACP client about. Zed keeps "New Agent Thread" until
+  // it receives session_info_update.title; native-agent auto-titling does not run.
+  private knownTitle: string | null = null
+  private titleEmitted = false
+
   readonly proc: PiRpcProcess
   private readonly conn: AgentSideConnection
   private readonly fileCommands: FileSlashCommand[]
@@ -274,6 +285,8 @@ export class PiAcpSession {
   // Current in-flight turn (if any). Additional prompts are queued.
   private pendingTurn: PendingTurn | null = null
   private readonly turnQueue: QueuedTurn[] = []
+  private turnError: string | null = null
+  private hasEmittedContent = false
   // Track tool call statuses and ensure they are monotonic (pending -> in_progress -> completed).
   // Some pi events can arrive out of order (e.g. late toolcall_* deltas after execution starts),
   // and clients may hide progress if we ever downgrade back to `pending`.
@@ -334,7 +347,38 @@ export class PiAcpSession {
     })
   }
 
-  async prompt(message: string, images: unknown[] = []): Promise<StopReason> {
+  rememberTitle(title: string | null | undefined, opts?: { emitted?: boolean }): void {
+    const trimmed = title?.trim()
+    if (!trimmed) return
+    this.knownTitle = trimmed
+    if (opts?.emitted) this.titleEmitted = true
+  }
+
+  emitSessionTitle(title: string): void {
+    const trimmed = title.trim()
+    if (!trimmed) return
+    this.knownTitle = trimmed
+    this.titleEmitted = true
+    this.emit({
+      sessionUpdate: 'session_info_update',
+      title: trimmed,
+      updatedAt: new Date().toISOString()
+    })
+  }
+
+  private takeInitialTitle(message: string): string | undefined {
+    if (this.titleEmitted) return undefined
+    const title = this.knownTitle ?? titleFromUserText(message)
+    if (!title) return undefined
+    this.knownTitle = title
+    this.titleEmitted = true
+    return title
+  }
+
+  async prompt(message: string, images: unknown[] = [], titleHint?: string | null): Promise<StopReason> {
+    if (titleHint && !this.knownTitle) {
+      this.rememberTitle(titleHint)
+    }
     // pi RPC mode disables slash command expansion, so we do it here.
     const expandedMessage = expandSlashCommand(message, this.fileCommands)
 
@@ -391,7 +435,31 @@ export class PiAcpSession {
     }
 
     // Abort the currently running turn (if any). If nothing is running, this is a no-op.
-    await this.proc.abort()
+    try {
+      await this.proc.abort()
+    } catch {
+      // ignore abort error
+    }
+
+    // Safety fallback: if pi doesn't settle within 3s after abort, force-settle the pending turn
+    if (this.pendingTurn) {
+      const turn = this.pendingTurn
+      setTimeout(() => {
+        if (this.pendingTurn === turn) {
+          turn.resolve('cancelled')
+          this.pendingTurn = null
+          this.inAgentLoop = false
+          this.emit({
+            sessionUpdate: 'session_info_update',
+            _meta: { piAcp: { queueDepth: 0, running: false } }
+          })
+        }
+      }, 3000).unref?.()
+    }
+  }
+
+  isRunning(): boolean {
+    return Boolean(this.pendingTurn)
   }
 
   wasCancelRequested(): boolean {
@@ -474,12 +542,17 @@ export class PiAcpSession {
   private startTurn(t: QueuedTurn): void {
     this.cancelRequested = false
     this.inAgentLoop = false
+    this.turnError = null
+    this.hasEmittedContent = false
 
     this.pendingTurn = { resolve: t.resolve, reject: t.reject }
+
+    const title = this.takeInitialTitle(t.message)
 
     // Publish queue depth (0 because we're starting the turn now).
     this.emit({
       sessionUpdate: 'session_info_update',
+      ...(title ? { title, updatedAt: new Date().toISOString() } : {}),
       _meta: { piAcp: { queueDepth: this.turnQueue.length, running: true } }
     })
 
@@ -495,6 +568,18 @@ export class PiAcpSession {
         if (authErr) {
           this.pendingTurn?.reject(authErr)
         } else {
+          if (!this.cancelRequested) {
+            const errMsg = err instanceof Error ? err.message : String(err)
+            const prefix = this.hasEmittedContent ? '\n\n' : ''
+            this.emit({
+              sessionUpdate: 'agent_message_chunk',
+              content: {
+                type: 'text',
+                text: `${prefix}⚠️ **Error**: ${errMsg || 'Prompt failed to start.'}\n`
+              } satisfies ContentBlock
+            })
+            this.hasEmittedContent = true
+          }
           const reason: StopReason = this.cancelRequested ? 'cancelled' : 'error'
           this.pendingTurn?.resolve(reason)
         }
@@ -522,6 +607,7 @@ export class PiAcpSession {
 
         // Stream assistant text.
         if (ame?.type === 'text_delta' && typeof ame.delta === 'string') {
+          this.hasEmittedContent = true
           this.emit({
             sessionUpdate: 'agent_message_chunk',
             content: { type: 'text', text: ame.delta } satisfies ContentBlock
@@ -611,6 +697,7 @@ export class PiAcpSession {
       }
 
       case 'tool_execution_start': {
+        this.hasEmittedContent = true
         const toolCallId = String((ev as any).toolCallId ?? crypto.randomUUID())
         const toolName = String((ev as any).toolName ?? 'tool')
         const args = (ev as any).args
@@ -781,6 +868,7 @@ export class PiAcpSession {
       }
 
       case 'auto_retry_start': {
+        this.turnError = null
         this.emit({
           sessionUpdate: 'agent_message_chunk',
           content: { type: 'text', text: formatAutoRetryMessage(ev) } satisfies ContentBlock
@@ -818,6 +906,54 @@ export class PiAcpSession {
         break
       }
 
+      case 'message_end': {
+        const msg = (ev as any).message
+        const role = String(msg?.role ?? '')
+        if (role === 'assistant' && !this.cancelRequested) {
+          const stopReason = String(msg?.stopReason ?? '')
+          const rawErrorMessage = typeof msg?.errorMessage === 'string' ? msg.errorMessage.trim() : ''
+
+          if (stopReason === 'error' || rawErrorMessage) {
+            const displayError = rawErrorMessage || 'Model request failed with an error.'
+            this.turnError = displayError
+
+            const prefix = this.hasEmittedContent ? '\n\n' : ''
+            this.emit({
+              sessionUpdate: 'agent_message_chunk',
+              content: {
+                type: 'text',
+                text: `${prefix}⚠️ **Error**: ${displayError}\n`
+              } satisfies ContentBlock
+            })
+            this.hasEmittedContent = true
+          }
+        }
+        break
+      }
+
+      case 'extension_error': {
+        if (!this.cancelRequested) {
+          const ext = stringProp(ev, 'extensionName') || 'Extension'
+          const err = stringProp(ev, 'error') || 'Unknown extension error'
+          const prefix = this.hasEmittedContent ? '\n\n' : ''
+          this.emit({
+            sessionUpdate: 'agent_message_chunk',
+            content: {
+              type: 'text',
+              text: `${prefix}⚠️ **${ext} Error**: ${err}\n`
+            } satisfies ContentBlock
+          })
+          this.hasEmittedContent = true
+        }
+        break
+      }
+
+      case 'session_info_changed': {
+        const name = stringProp(ev, 'name')
+        if (name) this.emitSessionTitle(name)
+        break
+      }
+
       case 'agent_start': {
         this.inAgentLoop = true
         break
@@ -840,10 +976,26 @@ export class PiAcpSession {
         // Ensure all updates derived from pi events are delivered before we resolve
         // the ACP `session/prompt` request.
         void this.flushEmits().finally(() => {
-          const reason: StopReason = this.cancelRequested ? 'cancelled' : 'end_turn'
+          const hadError = Boolean(this.turnError)
+          const reason: StopReason = this.cancelRequested
+            ? 'cancelled'
+            : hadError
+              ? 'error'
+              : 'end_turn'
           this.pendingTurn?.resolve(reason)
           this.pendingTurn = null
           this.inAgentLoop = false
+          this.turnError = null
+
+          // If this turn failed with an error, cancel queued prompts to prevent cascading failures.
+          if (hadError && this.turnQueue.length > 0) {
+            const queued = this.turnQueue.splice(0, this.turnQueue.length)
+            for (const t of queued) t.resolve('cancelled')
+            this.emit({
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: '\n⚠️ Cleared queued prompts due to an error in the previous turn.\n' }
+            })
+          }
 
           // Start next queued prompt, if any.
           const next = this.turnQueue.shift()

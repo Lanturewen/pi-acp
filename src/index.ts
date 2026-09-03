@@ -49,7 +49,72 @@ const output = new ReadableStream<Uint8Array>({
 
 const stream = ndJsonStream(input, output)
 
-const agent = new AgentSideConnection(conn => new PiAcpAgent(conn), stream)
+const agentHolder: { agent?: PiAcpAgent } = {}
+
+function wrapAcpStream(
+  rawStream: { readable: ReadableStream<any>; writable: WritableStream<any> },
+  holder: { agent?: PiAcpAgent }
+) {
+  const requestIdToSession = new Map<string, string>()
+
+  const readable = rawStream.readable.pipeThrough(
+    new TransformStream<any, any>({
+      transform(message, controller) {
+        if (message && typeof message === 'object') {
+          const id = message.id != null ? String(message.id) : null
+          const sessionId = typeof message.params?.sessionId === 'string' ? message.params.sessionId : null
+
+          if (id && sessionId) {
+            requestIdToSession.set(id, sessionId)
+            holder.agent?.registerRequestIdSession(id, sessionId)
+          }
+
+          if (message.method === '$/cancel_request') {
+            const rawReqId = message.params?.requestId ?? message.params?.id
+            const reqId = rawReqId != null ? String(rawReqId) : null
+            const targetSessionId = reqId ? requestIdToSession.get(reqId) : null
+
+            if (targetSessionId) {
+              // Translate LSP-style $/cancel_request to ACP standard session/cancel notification
+              controller.enqueue({
+                jsonrpc: '2.0',
+                method: 'session/cancel',
+                params: { sessionId: targetSessionId }
+              })
+              return
+            }
+          }
+        }
+        controller.enqueue(message)
+      }
+    })
+  )
+
+  const transformWritable = new TransformStream<any, any>({
+    transform(message, controller) {
+      if (message && typeof message === 'object' && message.id != null) {
+        const id = String(message.id)
+        requestIdToSession.delete(id)
+        holder.agent?.unregisterRequestId(id)
+      }
+      controller.enqueue(message)
+    }
+  })
+  void transformWritable.readable.pipeTo(rawStream.writable).catch(() => {})
+
+  return {
+    readable,
+    writable: transformWritable.writable
+  }
+}
+
+const wrappedStream = wrapAcpStream(stream, agentHolder)
+
+const agent = new AgentSideConnection(conn => {
+  const a = new PiAcpAgent(conn)
+  agentHolder.agent = a
+  return a
+}, wrappedStream)
 
 function shutdown() {
   try {
