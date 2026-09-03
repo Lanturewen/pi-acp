@@ -1062,3 +1062,39 @@ test('PiAcpSession: emits visible error message on extension_error', async () =>
   assert.ok(extError)
   assert.match((extError.update as any).content.text, /Failed to connect to backend/)
 })
+
+test('PiAcpSession: process_exit resolves pending prompt turn and emits visible error', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  const session = new PiAcpSession({
+    sessionId: 's-exit',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  const promptPromise = session.prompt('will fail due to process crash')
+  assert.equal(session.isRunning(), true)
+
+  proc.emit({
+    type: 'process_exit',
+    code: 1,
+    signal: 'SIGSEGV',
+    error: 'pi process exited unexpectedly'
+  })
+
+  const stopReason = await promptPromise
+  assert.equal(stopReason, 'error')
+  assert.equal(session.isRunning(), false)
+
+  const processError = conn.updates.find(
+    u =>
+      (u.update as any).sessionUpdate === 'agent_message_chunk' &&
+      (u.update as any).content?.text?.includes('Process Error')
+  )
+  assert.ok(processError)
+  assert.match((processError.update as any).content.text, /pi process exited unexpectedly/)
+})

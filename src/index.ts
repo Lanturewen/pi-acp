@@ -74,8 +74,11 @@ function wrapAcpStream(
             const reqId = rawReqId != null ? String(rawReqId) : null
             const targetSessionId = reqId ? requestIdToSession.get(reqId) : null
 
-            if (targetSessionId) {
-              // Translate LSP-style $/cancel_request to ACP standard session/cancel notification
+            // If it's a notification (no id) and we found the target session,
+            // translate it to standard ACP session/cancel notification.
+            // If it has an id (a request), let AgentSideConnection handle it
+            // via extMethod so that a proper response is sent back to Zed!
+            if (!message.id && targetSessionId) {
               controller.enqueue({
                 jsonrpc: '2.0',
                 method: 'session/cancel',

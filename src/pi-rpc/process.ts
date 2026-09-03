@@ -118,11 +118,25 @@ export class PiRpcProcess {
       const err = new Error(`pi process exited (code=${code}, signal=${signal})`)
       for (const [, p] of this.pending) p.reject(err)
       this.pending.clear()
+      for (const h of this.eventHandlers) {
+        try {
+          h({ type: 'process_exit', code, signal, error: err.message })
+        } catch {
+          // ignore
+        }
+      }
     })
 
     child.on('error', err => {
       for (const [, p] of this.pending) p.reject(err)
       this.pending.clear()
+      for (const h of this.eventHandlers) {
+        try {
+          h({ type: 'process_exit', error: err.message })
+        } catch {
+          // ignore
+        }
+      }
     })
   }
 

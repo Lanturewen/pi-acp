@@ -441,6 +441,30 @@ export class PiAcpSession {
       // ignore abort error
     }
 
+    // Finalize any active tool calls immediately so client UI stops spinning
+    for (const [toolCallId, status] of this.currentToolCalls) {
+      if (status === 'pending' || status === 'in_progress') {
+        if (this.bashToolCallIds.has(toolCallId)) {
+          this.emit({
+            sessionUpdate: 'tool_call_update',
+            toolCallId,
+            status: 'failed',
+            _meta: {
+              terminal_exit: { terminal_id: toolCallId, exit_code: 130, signal: 'SIGINT' }
+            }
+          })
+        } else {
+          this.emit({
+            sessionUpdate: 'tool_call_update',
+            toolCallId,
+            status: 'failed'
+          })
+        }
+      }
+    }
+    this.currentToolCalls.clear()
+    this.bashToolCallIds.clear()
+
     // Safety fallback: if pi doesn't settle within 3s after abort, force-settle the pending turn
     if (this.pendingTurn) {
       const turn = this.pendingTurn
@@ -948,6 +972,35 @@ export class PiAcpSession {
         break
       }
 
+      case 'process_exit': {
+        this.inAgentLoop = false
+        if (this.pendingTurn) {
+          const errMsg = String((ev as any).error || 'pi process terminated unexpectedly')
+          if (!this.cancelRequested) {
+            const prefix = this.hasEmittedContent ? '\n\n' : ''
+            this.emit({
+              sessionUpdate: 'agent_message_chunk',
+              content: {
+                type: 'text',
+                text: `${prefix}⚠️ **Process Error**: ${errMsg}\n`
+              } satisfies ContentBlock
+            })
+            this.hasEmittedContent = true
+          }
+          const turn = this.pendingTurn
+          this.pendingTurn = null
+          const reason: StopReason = this.cancelRequested ? 'cancelled' : 'error'
+          void this.flushEmits().finally(() => {
+            turn.resolve(reason)
+            this.emit({
+              sessionUpdate: 'session_info_update',
+              _meta: { piAcp: { queueDepth: 0, running: false } }
+            })
+          })
+        }
+        break
+      }
+
       case 'session_info_changed': {
         const name = stringProp(ev, 'name')
         if (name) this.emitSessionTitle(name)
@@ -976,6 +1029,34 @@ export class PiAcpSession {
         // Ensure all updates derived from pi events are delivered before we resolve
         // the ACP `session/prompt` request.
         void this.flushEmits().finally(() => {
+          // Finalize any stranded tool calls that never got tool_execution_end
+          for (const [toolCallId, status] of this.currentToolCalls) {
+            if (status === 'pending' || status === 'in_progress') {
+              if (this.bashToolCallIds.has(toolCallId)) {
+                this.emit({
+                  sessionUpdate: 'tool_call_update',
+                  toolCallId,
+                  status: this.cancelRequested ? 'failed' : 'completed',
+                  _meta: {
+                    terminal_exit: {
+                      terminal_id: toolCallId,
+                      exit_code: this.cancelRequested ? 130 : 0,
+                      signal: this.cancelRequested ? 'SIGINT' : null
+                    }
+                  }
+                })
+              } else {
+                this.emit({
+                  sessionUpdate: 'tool_call_update',
+                  toolCallId,
+                  status: this.cancelRequested ? 'failed' : 'completed'
+                })
+              }
+            }
+          }
+          this.currentToolCalls.clear()
+          this.bashToolCallIds.clear()
+
           const hadError = Boolean(this.turnError)
           const reason: StopReason = this.cancelRequested
             ? 'cancelled'
