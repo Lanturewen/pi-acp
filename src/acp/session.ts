@@ -175,6 +175,7 @@ export class SessionManager {
     const s = this.sessions.get(sessionId)
     if (!s) return
     try {
+      void s.cancel?.()
       s.proc.dispose?.()
     } catch {
       // ignore
@@ -975,8 +976,9 @@ export class PiAcpSession {
       case 'process_exit': {
         this.inAgentLoop = false
         if (this.pendingTurn) {
+          const isTermination = (ev as any).code === 143 || (ev as any).code === 130 || (ev as any).signal === 'SIGTERM' || (ev as any).signal === 'SIGINT'
           const errMsg = String((ev as any).error || 'pi process terminated unexpectedly')
-          if (!this.cancelRequested) {
+          if (!this.cancelRequested && !isTermination) {
             const prefix = this.hasEmittedContent ? '\n\n' : ''
             this.emit({
               sessionUpdate: 'agent_message_chunk',
@@ -989,7 +991,7 @@ export class PiAcpSession {
           }
           const turn = this.pendingTurn
           this.pendingTurn = null
-          const reason: StopReason = this.cancelRequested ? 'cancelled' : 'error'
+          const reason: StopReason = (this.cancelRequested || isTermination) ? 'cancelled' : 'error'
           void this.flushEmits().finally(() => {
             turn.resolve(reason)
             this.emit({

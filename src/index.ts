@@ -122,7 +122,7 @@ const agent = new AgentSideConnection(conn => {
 function shutdown() {
   try {
     // Best-effort: dispose session subprocesses when the client disconnects.
-    ;(agent as any)?.agent?.dispose?.()
+    agentHolder.agent?.dispose?.()
   } catch {
     // ignore
   }
