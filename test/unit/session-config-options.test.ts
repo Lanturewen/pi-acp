@@ -201,3 +201,113 @@ test('PiAcpAgent: setSessionConfigOption maps thought level changes to pi and em
     }
   ])
 })
+
+test('PiAcpAgent: dynamically aligns thinking levels with model and preserves custom levels like ultra', async () => {
+  const realSetTimeout = globalThis.setTimeout
+  ;(globalThis as any).setTimeout = () => 0 as any
+
+  try {
+    const conn = new FakeAgentSideConnection()
+    const session = {
+      sessionId: 's2',
+      cwd: process.cwd(),
+      proc: {
+        async getAvailableModels() {
+          return {
+            models: [{ provider: 'test', id: 'custom-model', name: 'Custom Model' }]
+          }
+        },
+        async getAvailableThinkingLevels() {
+          return ['low', 'medium', 'high', 'xhigh', 'max']
+        },
+        async getState() {
+          return {
+            thinkingLevel: 'high',
+            model: {
+              provider: 'test',
+              id: 'custom-model',
+              reasoning: true,
+              thinkingLevelMap: {
+                ultra: 'ultra'
+              }
+            }
+          }
+        }
+      },
+      setStartupInfo() {},
+      sendStartupInfoIfPending() {}
+    }
+
+    const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
+    ;(agent as any).sessions = new FakeSessions(session) as any
+
+    const result = await agent.newSession({ cwd: process.cwd(), mcpServers: [] } as any)
+
+    const thoughtOption = result.configOptions.find(o => o.id === 'thought_level')
+    assert.ok(thoughtOption)
+    assert.deepEqual(
+      thoughtOption.options.map(o => o.value),
+      ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+    )
+    assert.equal(result.modes?.currentModeId, 'high')
+  } finally {
+    ;(globalThis as any).setTimeout = realSetTimeout
+  }
+})
+
+test('PiAcpAgent: setSessionConfigOption syncs clamped effective level from pi', async () => {
+  const conn = new FakeAgentSideConnection()
+  const state = {
+    thinkingLevel: 'low',
+    model: { provider: 'test', id: 'always-on' }
+  }
+
+  const session = {
+    sessionId: 's3',
+    cwd: process.cwd(),
+    proc: {
+      async getAvailableModels() {
+        return {
+          models: [{ provider: 'test', id: 'always-on', name: 'Always On' }]
+        }
+      },
+      async getAvailableThinkingLevels() {
+        return ['low', 'medium', 'high']
+      },
+      async getState() {
+        return state
+      },
+      async setThinkingLevel(_level: string) {
+        // Model does not support "off", pi clamps it to "low"
+        state.thinkingLevel = 'low'
+      }
+    }
+  }
+
+  const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
+  ;(agent as any).sessions = new FakeSessions(session) as any
+
+  const result = await agent.setSessionConfigOption({
+    sessionId: 's3',
+    configId: 'thought_level',
+    value: 'off'
+  } as any)
+
+  assert.equal(result.configOptions.find(option => option.id === 'thought_level')?.currentValue, 'low')
+  assert.deepEqual(conn.updates, [
+    {
+      sessionId: 's3',
+      update: {
+        sessionUpdate: 'current_mode_update',
+        currentModeId: 'low'
+      }
+    },
+    {
+      sessionId: 's3',
+      update: {
+        sessionUpdate: 'config_option_update',
+        configOptions: result.configOptions
+      }
+    }
+  ])
+})
