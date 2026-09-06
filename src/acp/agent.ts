@@ -1003,9 +1003,12 @@ export class PiAcpAgent implements ACPAgent {
     }
 
     // If the client is re-loading a session that is already active, tear down the existing
-    // pi subprocess so we can start fresh and re-advertise commands reliably.
+    // pi subprocess so we can start fresh and re-advertise commands reliably, unless it's currently running.
     // (Some clients may call session/load when restoring from history.)
-    this.sessions.close(params.sessionId)
+    const existing = this.sessions.maybeGet(params.sessionId)
+    if (!existing?.isRunning()) {
+      this.sessions.close(params.sessionId)
+    }
 
     this.lastSessionCwd = params.cwd
 

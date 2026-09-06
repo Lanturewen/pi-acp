@@ -183,10 +183,11 @@ export class SessionManager {
     this.sessions.delete(sessionId)
   }
 
-  /** Close all sessions except the one with `keepSessionId`. */
+  /** Close all idle sessions except the one with `keepSessionId`. Running sessions are preserved. */
   closeAllExcept(keepSessionId: string): void {
-    for (const [id] of this.sessions) {
+    for (const [id, s] of this.sessions) {
       if (id === keepSessionId) continue
+      if (s.isRunning()) continue
       this.close(id)
     }
   }
