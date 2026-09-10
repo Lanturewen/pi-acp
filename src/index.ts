@@ -113,7 +113,7 @@ function wrapAcpStream(
 
 const wrappedStream = wrapAcpStream(stream, agentHolder)
 
-const agent = new AgentSideConnection(conn => {
+const _agent = new AgentSideConnection(conn => {
   const a = new PiAcpAgent(conn)
   agentHolder.agent = a
   return a

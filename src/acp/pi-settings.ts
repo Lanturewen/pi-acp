@@ -73,3 +73,96 @@ export function getQuietStartup(cwd: string): boolean {
 
   return false
 }
+
+/**
+ * Mirror pi's enabledModels setting (array of model glob/ID patterns).
+ * Checks PI_ENABLED_MODELS env var first, then merged project + global settings.json.
+ */
+export function getEnabledModels(cwd?: string): string[] | null {
+  if (process.env.PI_ENABLED_MODELS) {
+    const raw = process.env.PI_ENABLED_MODELS.trim()
+    try {
+      if (raw.startsWith('[')) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean)
+      }
+    } catch {
+      // ignore
+    }
+    return raw
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+  }
+
+  if (cwd) {
+    const merged = getMergedSettings(cwd)
+    if (Array.isArray(merged.enabledModels)) {
+      return merged.enabledModels.map(String).filter(Boolean)
+    }
+  } else {
+    const globalSettingsPath = join(getAgentDir(), 'settings.json')
+    const global = readJsonFile(globalSettingsPath)
+    if (Array.isArray(global.enabledModels)) {
+      return global.enabledModels.map(String).filter(Boolean)
+    }
+  }
+
+  return null
+}
+
+/**
+ * Checks if a model matches a pattern (glob, exact, or partial match).
+ * Strips optional trailing thinking level suffix (e.g. ":high").
+ */
+export function matchesModelPattern(
+  model: { provider: string; id: string; name?: string },
+  pattern: string
+): boolean {
+  const trimmed = pattern.trim()
+  if (!trimmed) return false
+
+  // Strip optional thinking level suffix (:off, :low, etc.)
+  const colonIdx = trimmed.lastIndexOf(':')
+  let cleanPattern = trimmed
+  if (colonIdx !== -1) {
+    const suffix = trimmed.substring(colonIdx + 1).toLowerCase()
+    const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+    if (thinkingLevels.includes(suffix)) {
+      cleanPattern = trimmed.substring(0, colonIdx).trim()
+    }
+  }
+
+  const pLower = cleanPattern.toLowerCase()
+  const providerLower = model.provider.toLowerCase()
+  const idLower = model.id.toLowerCase()
+  const fullIdLower = `${providerLower}/${idLower}`
+  const nameLower = (model.name ?? '').toLowerCase()
+
+  // Wildcard matching with * or ?
+  if (pLower.includes('*') || pLower.includes('?')) {
+    const regex = new RegExp(
+      '^' + pLower.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$',
+      'i'
+    )
+    return regex.test(fullIdLower) || regex.test(idLower) || (Boolean(nameLower) && regex.test(nameLower))
+  }
+
+  // Exact ID match or full provider/id match
+  if (fullIdLower === pLower || idLower === pLower) {
+    return true
+  }
+
+  // Exact Provider match
+  if (providerLower === pLower) {
+    return true
+  }
+
+  // Substring matching on id or name
+  if (idLower.includes(pLower) || (Boolean(nameLower) && nameLower.includes(pLower))) {
+    return true
+  }
+
+  return false
+}
+

@@ -24,7 +24,7 @@ export function titleFromUserText(text: string | null | undefined): string | nul
   }
 
   // Fallback: if message only had file links or file names, use the referenced filename
-  const fileMatch = text.match(/(?:file:\/\/|\/)([^\/\s\?#]+\.[a-zA-Z0-9_-]+)/)
+  const fileMatch = text.match(/(?:file:\/\/|\/)([^/\s?#]+\.[a-zA-Z0-9_-]+)/)
   if (fileMatch && fileMatch[1]) {
     try {
       const decoded = decodeURIComponent(fileMatch[1]).trim()

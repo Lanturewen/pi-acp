@@ -1,5 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { PiAcpAgent } from '../../src/acp/agent.js'
 import { FakeAgentSideConnection, asAgentConn } from '../helpers/fakes.js'
 
@@ -26,6 +29,12 @@ class FakeSessions {
 test('PiAcpAgent: newSession returns configOptions for model and thinking selectors', async () => {
   const realSetTimeout = globalThis.setTimeout
   ;(globalThis as any).setTimeout = () => 0 as any
+
+  const prevAgentDir = process.env.PI_CODING_AGENT_DIR
+  const prevEnabled = process.env.PI_ENABLED_MODELS
+  const tempAgentDir = mkdtempSync(join(tmpdir(), 'pi-acp-test-agent-'))
+  process.env.PI_CODING_AGENT_DIR = tempAgentDir
+  delete process.env.PI_ENABLED_MODELS
 
   try {
     const conn = new FakeAgentSideConnection()
@@ -68,8 +77,8 @@ test('PiAcpAgent: newSession returns configOptions for model and thinking select
         description: 'Select the model for this session',
         currentValue: 'test/beta',
         options: [
-          { value: 'test/alpha', name: 'test/Alpha', description: null },
-          { value: 'test/beta', name: 'test/Beta', description: null }
+          { value: 'test/alpha', name: 'Alpha', description: null },
+          { value: 'test/beta', name: 'Beta', description: null }
         ]
       },
       {
@@ -80,17 +89,22 @@ test('PiAcpAgent: newSession returns configOptions for model and thinking select
         description: 'Set the reasoning effort for this session',
         currentValue: 'high',
         options: [
-          { value: 'off', name: 'Thinking: off', description: null },
-          { value: 'minimal', name: 'Thinking: minimal', description: null },
-          { value: 'low', name: 'Thinking: low', description: null },
-          { value: 'medium', name: 'Thinking: medium', description: null },
-          { value: 'high', name: 'Thinking: high', description: null },
-          { value: 'xhigh', name: 'Thinking: xhigh', description: null }
+          { value: 'off', name: 'off', description: null },
+          { value: 'minimal', name: 'minimal', description: null },
+          { value: 'low', name: 'low', description: null },
+          { value: 'medium', name: 'medium', description: null },
+          { value: 'high', name: 'high', description: null },
+          { value: 'xhigh', name: 'xhigh', description: null }
         ]
       }
     ])
   } finally {
     ;(globalThis as any).setTimeout = realSetTimeout
+    if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = prevAgentDir
+    if (prevEnabled === undefined) delete process.env.PI_ENABLED_MODELS
+    else process.env.PI_ENABLED_MODELS = prevEnabled
+    rmSync(tempAgentDir, { recursive: true, force: true })
   }
 })
 
@@ -244,9 +258,9 @@ test('PiAcpAgent: dynamically aligns thinking levels with model and preserves cu
     const result = await agent.newSession({ cwd: process.cwd(), mcpServers: [] } as any)
 
     const thoughtOption = result.configOptions.find(o => o.id === 'thought_level')
-    assert.ok(thoughtOption)
+    assert.ok(thoughtOption && thoughtOption.type === 'select')
     assert.deepEqual(
-      thoughtOption.options.map(o => o.value),
+      thoughtOption.options.map((o: any) => o.value),
       ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
     )
     assert.equal(result.modes?.currentModeId, 'high')
@@ -311,3 +325,69 @@ test('PiAcpAgent: setSessionConfigOption syncs clamped effective level from pi',
     }
   ])
 })
+
+test('PiAcpAgent: filters available models by enabledModels setting and retains current model', async () => {
+  const realSetTimeout = globalThis.setTimeout
+  ;(globalThis as any).setTimeout = () => 0 as any
+
+  const prevAgentDir = process.env.PI_CODING_AGENT_DIR
+  const prevEnabled = process.env.PI_ENABLED_MODELS
+  const tempAgentDir = mkdtempSync(join(tmpdir(), 'pi-acp-test-agent-'))
+  process.env.PI_CODING_AGENT_DIR = tempAgentDir
+  process.env.PI_ENABLED_MODELS = 'test/alpha,openai/*'
+
+  try {
+    const conn = new FakeAgentSideConnection()
+    const session = {
+      sessionId: 's4',
+      cwd: process.cwd(),
+      proc: {
+        async getAvailableModels() {
+          return {
+            models: [
+              { provider: 'test', id: 'alpha', name: 'Alpha Model' },
+              { provider: 'test', id: 'beta', name: 'Beta Model' },
+              { provider: 'openai', id: 'gpt-4o', name: 'GPT-4o' },
+              { provider: 'anthropic', id: 'claude-3-5', name: 'Claude 3.5' }
+            ]
+          }
+        },
+        async getState() {
+          return {
+            thinkingLevel: 'off',
+            // Notice: test/beta is current, even though it is not in PI_ENABLED_MODELS
+            model: { provider: 'test', id: 'beta' }
+          }
+        }
+      },
+      setStartupInfo() {},
+      sendStartupInfoIfPending() {}
+    }
+
+    const agent = new PiAcpAgent(asAgentConn(conn), {} as any)
+    ;(agent as any).sessions = new FakeSessions(session) as any
+
+    const result = await agent.newSession({ cwd: process.cwd(), mcpServers: [] } as any)
+
+    const modelOption = result.configOptions.find(o => o.id === 'model')
+    assert.ok(modelOption && modelOption.type === 'select')
+    // test/alpha and openai/gpt-4o match the filter; test/beta is kept because it's current; anthropic/claude-3-5 is filtered out
+    assert.deepEqual(
+      modelOption.options.map((o: any) => o.value),
+      ['test/alpha', 'test/beta', 'openai/gpt-4o']
+    )
+    // Display names must have provider prefix removed
+    assert.deepEqual(
+      modelOption.options.map((o: any) => o.name),
+      ['Alpha Model', 'Beta Model', 'GPT-4o']
+    )
+  } finally {
+    ;(globalThis as any).setTimeout = realSetTimeout
+    if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
+    else process.env.PI_CODING_AGENT_DIR = prevAgentDir
+    if (prevEnabled === undefined) delete process.env.PI_ENABLED_MODELS
+    else process.env.PI_ENABLED_MODELS = prevEnabled
+    rmSync(tempAgentDir, { recursive: true, force: true })
+  }
+})
+

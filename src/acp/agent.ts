@@ -43,7 +43,7 @@ import {
 } from './translate/bash.js'
 import { promptToPiMessage } from './translate/prompt.js'
 import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from './slash-commands.js'
-import { getAgentDir, getEnableSkillCommands, getQuietStartup } from './pi-settings.js'
+import { getAgentDir, getEnableSkillCommands, getEnabledModels, getQuietStartup, matchesModelPattern } from './pi-settings.js'
 import { toAvailableCommandsFromPiGetCommands } from './pi-commands.js'
 import { maybeAuthRequiredError } from './auth-required.js'
 import { isAbsolute } from 'node:path'
@@ -370,11 +370,15 @@ export class PiAcpAgent implements ACPAgent {
       )
     }
 
-    const { configOptions, models, modes } = await getSessionConfiguration(session.proc, {
-      state,
-      availableModels,
-      availableThinkingLevels
-    })
+    const { configOptions, models, modes } = await getSessionConfiguration(
+      session.proc,
+      {
+        state,
+        availableModels,
+        availableThinkingLevels
+      },
+      params.cwd
+    )
 
     const quietStartup = getQuietStartup(params.cwd)
     const updateNotice = buildUpdateNotice()
@@ -1149,7 +1153,7 @@ export class PiAcpAgent implements ACPAgent {
       })
     }
 
-    const { configOptions, models, modes } = await getSessionConfiguration(proc)
+    const { configOptions, models, modes } = await getSessionConfiguration(proc, undefined, params.cwd)
 
     const response = {
       configOptions,
@@ -1226,7 +1230,7 @@ export class PiAcpAgent implements ACPAgent {
   async unstable_setSessionModel(params: { sessionId: string; modelId: string }): Promise<void> {
     const session = await this.restoreSession(params.sessionId)
     await setSessionModel(session.proc, params.modelId)
-    await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc)
+    await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc, session.cwd)
   }
 
   async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
@@ -1251,7 +1255,7 @@ export class PiAcpAgent implements ACPAgent {
       }
     })
 
-    await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc)
+    await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc, session.cwd)
 
     return {}
   }
@@ -1287,7 +1291,7 @@ export class PiAcpAgent implements ACPAgent {
       throw RequestError.invalidParams(`Unknown config option: ${configId}`)
     }
 
-    const configOptions = await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc)
+    const configOptions = await emitConfigOptionsUpdate(this.conn, session.sessionId, session.proc, session.cwd)
     return { configOptions }
   }
 }
@@ -1353,13 +1357,13 @@ async function getThinkingState(
   }
 
   const tl = typeof state?.thinkingLevel === 'string' ? state.thinkingLevel : null
-  let current: string = tl && available.includes(tl) ? tl : (available.includes('medium') ? 'medium' : available[0] ?? 'off')
+  const current: string = tl && available.includes(tl) ? tl : (available.includes('medium') ? 'medium' : available[0] ?? 'off')
 
   return {
     currentModeId: current,
     availableModes: available.map(id => ({
       id,
-      name: `Thinking: ${id}`,
+      name: id,
       description: null
     }))
   }
@@ -1367,7 +1371,8 @@ async function getThinkingState(
 
 async function getSessionConfiguration(
   proc: PiRpcProcess,
-  pre?: { state?: any | null; availableModels?: any | null; availableThinkingLevels?: string[] | null }
+  pre?: { state?: any | null; availableModels?: any | null; availableThinkingLevels?: string[] | null },
+  cwd?: string
 ): Promise<{
   configOptions: SessionConfigOption[]
   models: {
@@ -1384,7 +1389,7 @@ async function getSessionConfiguration(
   }
 }> {
   const [models, modes] = await Promise.all([
-    getModelState(proc, pre),
+    getModelState(proc, pre, cwd),
     getThinkingState(proc, { state: pre?.state, availableThinkingLevels: pre?.availableThinkingLevels })
   ])
 
@@ -1446,7 +1451,8 @@ function buildConfigOptions(state: {
 
 async function getModelState(
   proc: PiRpcProcess,
-  pre?: { state?: any | null; availableModels?: any | null }
+  pre?: { state?: any | null; availableModels?: any | null },
+  cwd?: string
 ): Promise<{
   availableModels: AdvertisedModel[]
   currentModelId: string
@@ -1474,7 +1480,7 @@ async function getModelState(
       const name = String(m?.name ?? id)
       return {
         modelId: `${provider}/${id}`,
-        name: `${provider}/${name}`,
+        name,
         description: null
       } satisfies AdvertisedModel
     })
@@ -1505,6 +1511,21 @@ async function getModelState(
   // Fallback if current model is unknown: use first in list.
   if (!currentModelId) currentModelId = availableModels[0]?.modelId ?? 'default'
 
+  // Filter by enabledModels if specified (pi settings or PI_ENABLED_MODELS env)
+  const enabledPatterns = getEnabledModels(cwd)
+  if (enabledPatterns && enabledPatterns.length > 0) {
+    const filtered = availableModels.filter(m => {
+      if (currentModelId && m.modelId === currentModelId) return true
+      const [provider, ...rest] = m.modelId.split('/')
+      return enabledPatterns.some(pattern =>
+        matchesModelPattern({ provider, id: rest.join('/'), name: m.name }, pattern)
+      )
+    })
+    if (filtered.length > 0) {
+      availableModels = filtered
+    }
+  }
+
   return {
     availableModels,
     currentModelId: currentModelId ?? availableModels[0]?.modelId ?? 'default'
@@ -1514,9 +1535,10 @@ async function getModelState(
 async function emitConfigOptionsUpdate(
   conn: AgentSideConnection,
   sessionId: string,
-  proc: PiRpcProcess
+  proc: PiRpcProcess,
+  cwd?: string
 ): Promise<SessionConfigOption[]> {
-  const { configOptions } = await getSessionConfiguration(proc)
+  const { configOptions } = await getSessionConfiguration(proc, undefined, cwd)
 
   await conn.sessionUpdate({
     sessionId,
