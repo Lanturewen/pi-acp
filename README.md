@@ -18,6 +18,11 @@ Expect some minor breaking changes.
   - Relative file paths from pi are resolved against the session cwd before being emitted as ACP tool locations, which enables follow-along features in clients like Zed
   - For `edit`, `pi-acp` attempts to infer a 1-based line number from a unique `oldText` match in the pre-edit file snapshot and includes it in the emitted tool location when possible
   - For `edit`, `pi-acp` snapshots the file before the tool runs and emits an ACP **structured diff** (`oldText`/`newText`) on completion when possible
+- **Model Filtering & Clean Display**
+  - **Scoped Models**: Automatically respects `enabledModels` configured in `~/.pi/agent/settings.json` or `<cwd>/.pi/settings.json` (supports wildcards like `antigravity/*`, `*flash*`).
+  - **Clean Labels**: Strips redundant provider prefixes (e.g. `antigravity/`, `xai/`) and provider tags like `(Antigravity)` from model options.
+  - **Clean Thinking Levels**: Removes the `Thinking: ` prefix from reasoning levels (`off`, `low`, `medium`, `high`, `xhigh`).
+  - **Fallback Safety**: The currently active model is always preserved even if omitted from `enabledModels`.
 - Session persistence
   - pi stores its own sessions in `~/.pi/agent/sessions/...`
   - `pi-acp` stores a small mapping file at `~/.pi/pi-acp/session-map.json` so `session/load` can reattach to a previous pi session file
@@ -89,22 +94,88 @@ npm install -g pi-acp
   }
 ```
 
-#### From source
+#### From source (Recommended for custom fork)
+
+Clone this repository and build it:
 
 ```bash
+git clone https://github.com/Lanturewen/pi-acp.git ~/.local/src/pi-acp
+cd ~/.local/src/pi-acp
 npm install
 npm run build
 ```
 
-Point your ACP client to the built `dist/index.js`:
+Then point your ACP client (e.g. Zed) to the built `dist/index.js` in `settings.json`:
 
 ```json
   "agent_servers": {
-    "pi": {
+    "pi-acp": {
+      "type": "custom",
+      "command": "node",
+      "args": ["/Users/YOUR_USERNAME/.local/src/pi-acp/dist/index.js"],
+      "env": {}
+    }
+  }
+```
+
+*(Replace `/Users/YOUR_USERNAME/.local/src/pi-acp` with your actual absolute path)*
+
+#### Global install from source via npm link
+
+Alternatively, link the package globally:
+
+```bash
+git clone https://github.com/Lanturewen/pi-acp.git
+cd pi-acp
+npm install
+npm run build
+npm install -g .
+```
+
+Then in Zed `settings.json`:
+
+```json
+  "agent_servers": {
+    "pi-acp": {
+      "type": "custom",
+      "command": "pi-acp",
+      "args": [],
+      "env": {}
+    }
+  }
+```
+
+### Model Filtering Configuration
+
+To display only a select group of models in Zed (just like `pi` CLI):
+
+Configure `enabledModels` in `~/.pi/agent/settings.json` (or `.pi/settings.json` in your project):
+
+```json
+{
+  "enabledModels": [
+    "antigravity/gemini-3.8-flash",
+    "openai-codex/gpt-5.6-luna",
+    "openai-codex/gpt-6-astra",
+    "xai/grok-4.6",
+    "antigravity/claude-sonnet-4-6"
+  ]
+}
+```
+
+Supports glob patterns such as `"antigravity/*"`, `"*flash*"`, `"claude-*"`.
+
+You can also override enabled models specifically for Zed in your `settings.json`:
+
+```json
+  "agent_servers": {
+    "pi-acp": {
       "type": "custom",
       "command": "node",
       "args": ["/path/to/pi-acp/dist/index.js"],
-      "env": {}
+      "env": {
+        "PI_ENABLED_MODELS": "antigravity/*,xai/grok-4.6,gpt-4o"
+      }
     }
   }
 ```
