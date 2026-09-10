@@ -48,55 +48,25 @@ npm install -g @earendil-works/pi-coding-agent
 
 ## Install
 
-### Add pi-acp to your ACP client, e.g. [Zed](https://zed.dev/docs/agents/external-agents/)
+### Quick Install (One-liner for Zed — Recommended)
 
-#### Using ACP Registry in Zed or other clients that support it:
-
-In Zed launch the registry with `zed: acp registry` command and select `pi ACP` adapter from the list. This will automatically add the agent server configuration to your `settings.json` and keep it up to date:
-
-```json
-  "agent_servers": {
-    "pi-acp": {
-      "type": "registry",
-    },
-  }
-```
-
-#### Using with `npx` (no global install needed, always loads the latest version):
-
-Add the following to your Zed `settings.json`:
-
-```json
-  "agent_servers": {
-    "pi": {
-      "type": "custom",
-      "command": "npx",
-      "args": ["-y", "pi-acp"],
-      "env": {}
-    }
-  }
-```
-
-#### Global install
+Run this single command in your terminal. It clones, installs dependencies, builds, and **automatically configures Zed's `settings.json`**:
 
 ```bash
-npm install -g pi-acp
+git clone https://github.com/Lanturewen/pi-acp.git ~/.local/src/pi-acp && cd ~/.local/src/pi-acp && npm install && npm run setup
 ```
 
-```json
-  "agent_servers": {
-    "pi": {
-      "type": "custom",
-      "command": "pi-acp",
-      "args": [],
-      "env": {}
-    }
-  }
-```
+That's it! `npm run setup` automatically:
+1. Builds the adapter (`npm run build`).
+2. Detects your operating system (macOS / Linux / Windows) and locates Zed's config.
+3. Automatically registers `pi-acp` into Zed's `settings.json` (preserving comments and creating a `.bak` backup).
+4. Launch or restart Zed — `pi-acp` is immediately ready in the Agent panel!
 
-#### From source (One-step automatic setup — Recommended)
+---
 
-Clone this repository and run setup:
+### Other Installation Methods
+
+#### Manual step-by-step from source
 
 ```bash
 git clone https://github.com/Lanturewen/pi-acp.git ~/.local/src/pi-acp
@@ -104,11 +74,6 @@ cd ~/.local/src/pi-acp
 npm install
 npm run setup
 ```
-
-That's it! `npm run setup` will automatically:
-1. Build the project (`npm run build`).
-2. Detect your OS and automatically configure `pi-acp` into Zed's `settings.json` (with automatic backup).
-3. Open or restart Zed, and `pi-acp` is immediately ready to use without manually editing any config files!
 
 #### Global install with automatic Zed setup
 
@@ -122,6 +87,31 @@ pi-acp --install-zed
 ```
 
 `pi-acp --install-zed` will automatically register the global `pi-acp` into Zed's `settings.json`.
+
+#### Using ACP Registry (Zed official)
+
+In Zed launch the registry with `zed: acp registry` command and select `pi ACP` adapter from the list:
+
+```json
+  "agent_servers": {
+    "pi-acp": {
+      "type": "registry",
+    },
+  }
+```
+
+#### Using with `npx`
+
+```json
+  "agent_servers": {
+    "pi": {
+      "type": "custom",
+      "command": "npx",
+      "args": ["-y", "pi-acp"],
+      "env": {}
+    }
+  }
+```
 
 ### Model Filtering Configuration
 
