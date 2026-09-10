@@ -75,6 +75,25 @@ export function getQuietStartup(cwd: string): boolean {
 }
 
 /**
+ * Cleans the model display name:
+ * 1. Strips leading provider prefix like "provider/"
+ * 2. Strips trailing parenthesized provider tags like " (Antigravity)"
+ */
+export function cleanModelDisplayName(rawName: string, provider?: string): string {
+  let name = rawName.trim()
+  if (provider) {
+    if (name.toLowerCase().startsWith(`${provider.toLowerCase()}/`)) {
+      name = name.slice(provider.length + 1).trim()
+    }
+    const escaped = provider.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    name = name.replace(new RegExp(`\\s*\\(${escaped}\\)\\s*$`, 'i'), '')
+  }
+  // Also strip common provider tags like (Antigravity)
+  name = name.replace(/\s*\(antigravity\)\s*$/i, '')
+  return name.trim()
+}
+
+/**
  * Mirror pi's enabledModels setting (array of model glob/ID patterns).
  * Checks PI_ENABLED_MODELS env var first, then merged project + global settings.json.
  */

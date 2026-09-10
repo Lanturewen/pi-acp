@@ -334,7 +334,7 @@ test('PiAcpAgent: filters available models by enabledModels setting and retains 
   const prevEnabled = process.env.PI_ENABLED_MODELS
   const tempAgentDir = mkdtempSync(join(tmpdir(), 'pi-acp-test-agent-'))
   process.env.PI_CODING_AGENT_DIR = tempAgentDir
-  process.env.PI_ENABLED_MODELS = 'test/alpha,openai/*'
+  process.env.PI_ENABLED_MODELS = 'test/alpha,openai/*,antigravity/*'
 
   try {
     const conn = new FakeAgentSideConnection()
@@ -345,9 +345,10 @@ test('PiAcpAgent: filters available models by enabledModels setting and retains 
         async getAvailableModels() {
           return {
             models: [
-              { provider: 'test', id: 'alpha', name: 'Alpha Model' },
+              { provider: 'test', id: 'alpha', name: 'Alpha Model (test)' },
               { provider: 'test', id: 'beta', name: 'Beta Model' },
               { provider: 'openai', id: 'gpt-4o', name: 'GPT-4o' },
+              { provider: 'antigravity', id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (Antigravity)' },
               { provider: 'anthropic', id: 'claude-3-5', name: 'Claude 3.5' }
             ]
           }
@@ -374,12 +375,12 @@ test('PiAcpAgent: filters available models by enabledModels setting and retains 
     // test/alpha and openai/gpt-4o match the filter; test/beta is kept because it's current; anthropic/claude-3-5 is filtered out
     assert.deepEqual(
       modelOption.options.map((o: any) => o.value),
-      ['test/alpha', 'test/beta', 'openai/gpt-4o']
+      ['test/alpha', 'test/beta', 'openai/gpt-4o', 'antigravity/gemini-3.8-flash']
     )
-    // Display names must have provider prefix removed
+    // Display names must have provider prefix and trailing parenthesized provider removed
     assert.deepEqual(
       modelOption.options.map((o: any) => o.name),
-      ['Alpha Model', 'Beta Model', 'GPT-4o']
+      ['Alpha Model', 'Beta Model', 'GPT-4o', 'Gemini 3.8 Flash']
     )
   } finally {
     ;(globalThis as any).setTimeout = realSetTimeout

@@ -43,7 +43,7 @@ import {
 } from './translate/bash.js'
 import { promptToPiMessage } from './translate/prompt.js'
 import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from './slash-commands.js'
-import { getAgentDir, getEnableSkillCommands, getEnabledModels, getQuietStartup, matchesModelPattern } from './pi-settings.js'
+import { cleanModelDisplayName, getAgentDir, getEnableSkillCommands, getEnabledModels, getQuietStartup, matchesModelPattern } from './pi-settings.js'
 import { toAvailableCommandsFromPiGetCommands } from './pi-commands.js'
 import { maybeAuthRequiredError } from './auth-required.js'
 import { isAbsolute } from 'node:path'
@@ -1477,7 +1477,8 @@ async function getModelState(
       const id = String(m?.id ?? '').trim()
       if (!provider || !id) return null
 
-      const name = String(m?.name ?? id)
+      const rawName = String(m?.name ?? id)
+      const name = cleanModelDisplayName(rawName, provider)
       return {
         modelId: `${provider}/${id}`,
         name,
