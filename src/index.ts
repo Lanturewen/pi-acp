@@ -1,6 +1,15 @@
 import { AgentSideConnection, ndJsonStream } from '@agentclientprotocol/sdk'
 import { PiAcpAgent } from './acp/agent.js'
 import { getPiCommand, shouldUseShellForPiCommand } from './pi-rpc/command.js'
+
+// Zed setup entrypoint. Configures Zed settings.json automatically.
+if (process.argv.includes('--install-zed') || process.argv.includes('--setup-zed')) {
+  const { setupZed } = await import('./acp/setup-zed.js')
+  const isLocal = process.argv.includes('--local') || process.argv[1]?.includes('dist')
+  setupZed({ global: !isLocal })
+  process.exit(0)
+}
+
 // Terminal Auth entrypoint. The ACP client launches the agent with `--terminal-login`.
 if (process.argv.includes('--terminal-login')) {
   const { spawnSync } = await import('node:child_process')

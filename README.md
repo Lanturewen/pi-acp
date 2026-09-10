@@ -94,35 +94,23 @@ npm install -g pi-acp
   }
 ```
 
-#### From source (Recommended for custom fork)
+#### From source (One-step automatic setup — Recommended)
 
-Clone this repository and build it:
+Clone this repository and run setup:
 
 ```bash
 git clone https://github.com/Lanturewen/pi-acp.git ~/.local/src/pi-acp
 cd ~/.local/src/pi-acp
 npm install
-npm run build
+npm run setup
 ```
 
-Then point your ACP client (e.g. Zed) to the built `dist/index.js` in `settings.json`:
+That's it! `npm run setup` will automatically:
+1. Build the project (`npm run build`).
+2. Detect your OS and automatically configure `pi-acp` into Zed's `settings.json` (with automatic backup).
+3. Open or restart Zed, and `pi-acp` is immediately ready to use without manually editing any config files!
 
-```json
-  "agent_servers": {
-    "pi-acp": {
-      "type": "custom",
-      "command": "node",
-      "args": ["/Users/YOUR_USERNAME/.local/src/pi-acp/dist/index.js"],
-      "env": {}
-    }
-  }
-```
-
-*(Replace `/Users/YOUR_USERNAME/.local/src/pi-acp` with your actual absolute path)*
-
-#### Global install from source via npm link
-
-Alternatively, link the package globally:
+#### Global install with automatic Zed setup
 
 ```bash
 git clone https://github.com/Lanturewen/pi-acp.git
@@ -130,20 +118,10 @@ cd pi-acp
 npm install
 npm run build
 npm install -g .
+pi-acp --install-zed
 ```
 
-Then in Zed `settings.json`:
-
-```json
-  "agent_servers": {
-    "pi-acp": {
-      "type": "custom",
-      "command": "pi-acp",
-      "args": [],
-      "env": {}
-    }
-  }
-```
+`pi-acp --install-zed` will automatically register the global `pi-acp` into Zed's `settings.json`.
 
 ### Model Filtering Configuration
 

@@ -37,6 +37,8 @@
     "dev": "tsx src/index.ts",
     "build": "tsup",
     "start": "node dist/index.js",
+    "setup": "npm run build && node --import tsx scripts/setup-zed.mjs",
+    "setup:global": "npm run build && node --import tsx scripts/setup-zed.mjs --global",
     "format": "prettier . --write",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
