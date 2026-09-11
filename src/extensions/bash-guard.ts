@@ -4,7 +4,7 @@
  * Prevents tools (especially `bash`) from hanging indefinitely by:
  * 1. Guiding the LLM in system prompt about streaming/SSE commands.
  * 2. Intercepting dangerous deadlock patterns (e.g. `curl -H "Accept: text/event-stream" ... | head`).
- * 3. Enforcing a sensible default timeout on all bash commands (60s) if the LLM didn't specify one.
+ * 3. Enforcing a sensible default timeout on all bash commands (120s) if the LLM didn't specify one.
  */
 
 interface ToolCallEvent {
@@ -56,9 +56,9 @@ export default function bashGuardExtension(pi: ExtensionAPI): void {
         }
       }
 
-      // Default timeout safeguard: enforce 60s timeout if model didn't specify one
+      // Default timeout safeguard: enforce 120s timeout if model didn't specify one
       if (input.timeout === undefined || input.timeout <= 0) {
-        input.timeout = 60
+        input.timeout = 120
       }
     }
   })
