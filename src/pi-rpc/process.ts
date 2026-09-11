@@ -1,6 +1,20 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import * as readline from 'node:readline'
+import { fileURLToPath } from 'node:url'
 import { getPiCommand, shouldUseShellForPiCommand } from './command.js'
+
+function getBuiltinExtensionPath(): string | undefined {
+  const candidates = [
+    fileURLToPath(new URL('./extensions/bash-guard.js', import.meta.url)),
+    fileURLToPath(new URL('../extensions/bash-guard.js', import.meta.url)),
+    fileURLToPath(new URL('../extensions/bash-guard.ts', import.meta.url))
+  ]
+  for (const p of candidates) {
+    if (existsSync(p)) return p
+  }
+  return undefined
+}
 
 export class PiRpcSpawnError extends Error {
   /** Underlying spawn error code, e.g. ENOENT, EACCES */
@@ -150,6 +164,13 @@ export class PiRpcProcess {
     // Keep extensions + prompt templates enabled because ACP users may rely on them
     // (e.g. MCP extensions, prompt templates for workflows).
     const args = ['--mode', 'rpc', '--no-themes']
+
+    // Inject built-in bash safety guard to prevent infinite hanging commands (e.g. streaming SSE | head)
+    const builtinGuard = getBuiltinExtensionPath()
+    if (builtinGuard) {
+      args.push('-e', builtinGuard)
+    }
+
     if (params.sessionPath) args.push('--session', params.sessionPath)
 
     const child = spawn(cmd, args, {
